@@ -1,0 +1,9 @@
+{
+  "name": "Journify (PERMA)",
+  "description": "A Purpose Journal based on the PERMA model helping users find meaning through AI-guided reflection and daily journaling.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
