@@ -1,8 +1,10 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { Camera, Save, X, Loader2, Sparkles, Sun, Heart, Cloud, Zap, Star, Smile, Eye, CloudRain, Frown, Meh, Anchor, Lightbulb, Image as ImageIcon } from 'lucide-react';
+import { Camera, Save, X, Loader2, Sparkles, Sun, Heart, Cloud, Zap, Star, Smile, Eye, CloudRain, Frown, Meh, Anchor, Lightbulb, Image as ImageIcon, ArrowDownCircle } from 'lucide-react';
 import { JournalEntry } from '../types';
 import { analyzeSentiment, generateJournalPrompt } from '../services/gemini';
+import { translations } from '../services/translations';
 
 const SimpleUUID = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
@@ -28,7 +30,8 @@ const getEmotionConfig = (sentiment: string) => {
 };
 
 const Journal = () => {
-  const { addEntry, user, entries } = useAppContext();
+  const { addEntry, user, entries, settings } = useAppContext();
+  const t = translations[settings.language].journal;
   const [activeTab, setActiveTab] = useState<'personal' | 'family' | 'professional'>('personal');
   const [form, setForm] = useState({
     personal: '',
@@ -38,20 +41,38 @@ const Journal = () => {
   const [images, setImages] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
-  const [lastSentiment, setLastSentiment] = useState<{ sentiment: string, summary: string } | null>(null);
+  const [lastSentiment, setLastSentiment] = useState<{ sentiment: string, summary: string, breakdown?: Record<string, number> } | null>(null);
   
-  // Prompt Generation State
   const [suggestedPrompt, setSuggestedPrompt] = useState('');
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
   
-  // Camera Logic
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isFlashing, setIsFlashing] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    let stream: MediaStream | null = null;
+    if (user) {
+        const savedDraft = localStorage.getItem(`draft_${user.email}`);
+        if (savedDraft) {
+            try {
+                const parsed = JSON.parse(savedDraft);
+                setForm(parsed);
+            } catch (e) {
+                console.error("Failed to parse draft", e);
+            }
+        }
+    }
+  }, [user]);
 
+  useEffect(() => {
+    if (user) {
+        localStorage.setItem(`draft_${user.email}`, JSON.stringify(form));
+    }
+  }, [form, user]);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
     const startCamera = async () => {
         if (isCameraOpen) {
             try {
@@ -63,14 +84,12 @@ const Journal = () => {
                 }
             } catch (err) {
                 console.error("Camera error:", err);
-                alert("No se pudo acceder a la cámara. Por favor verifica los permisos.");
+                alert("Camera error. Please check permissions.");
                 setIsCameraOpen(false);
             }
         }
     };
-
     startCamera();
-
     return () => {
         if (stream) {
             stream.getTracks().forEach(track => track.stop());
@@ -80,6 +99,7 @@ const Journal = () => {
 
   const capturePhoto = () => {
     if (videoRef.current) {
+        setIsFlashing(true);
         const canvas = document.createElement('canvas');
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
@@ -87,8 +107,11 @@ const Journal = () => {
         if (ctx) {
             ctx.drawImage(videoRef.current, 0, 0);
             const imageSrc = canvas.toDataURL('image/jpeg', 0.8);
-            setImages(prev => [...prev, imageSrc]);
-            setIsCameraOpen(false);
+            setTimeout(() => {
+                setImages(prev => [...prev, imageSrc]);
+                setIsFlashing(false);
+                setIsCameraOpen(false);
+            }, 150);
         }
     }
   };
@@ -120,8 +143,7 @@ const Journal = () => {
     try {
         const purpose = user.purposeAnalysis || "User seeks meaning and happiness.";
         const recentThemes = entries.slice(0, 3).map(e => e.sentimentSummary).join(', ') || "No recent entries.";
-        
-        const prompt = await generateJournalPrompt(purpose, recentThemes);
+        const prompt = await generateJournalPrompt(purpose, recentThemes, settings.language);
         setSuggestedPrompt(prompt);
     } catch (error) {
         console.error("Failed to generate prompt", error);
@@ -130,20 +152,37 @@ const Journal = () => {
     }
   };
 
+  const handleUsePrompt = () => {
+    if (suggestedPrompt) {
+        setForm(prev => ({
+            ...prev,
+            [activeTab]: prev[activeTab] ? `${prev[activeTab]}\n\n${suggestedPrompt}\n` : `${suggestedPrompt}\n`
+        }));
+        setSuggestedPrompt('');
+    }
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     setLastSentiment(null);
     try {
-      // Combine text for analysis
       const fullText = `${form.personal} ${form.family} ${form.professional}`.trim();
-      
-      let sentimentData = { sentiment: 'Neutral', summary: '' };
+      let sentimentData = { sentiment: 'Neutral', summary: '', breakdown: {} as Record<string, number> };
       if (fullText.length > 5) {
-        const result = await analyzeSentiment(fullText);
-        sentimentData = { sentiment: result.sentiment, summary: result.summary };
+        const result = await analyzeSentiment(fullText, settings.language);
+        const breakdownRecord: Record<string, number> = {};
+        if (result.breakdown && Array.isArray(result.breakdown)) {
+            result.breakdown.forEach((item) => {
+                breakdownRecord[item.emotion] = item.percentage;
+            });
+        }
+        sentimentData = { 
+            sentiment: result.sentiment, 
+            summary: result.summary,
+            breakdown: breakdownRecord
+        };
         setLastSentiment(sentimentData);
       }
-
       const entry: JournalEntry = {
         id: SimpleUUID(),
         date: new Date().toISOString(),
@@ -153,22 +192,23 @@ const Journal = () => {
         professional: form.professional,
         images: images,
         sentiment: sentimentData.sentiment,
-        sentimentSummary: sentimentData.summary
+        sentimentSummary: sentimentData.summary,
+        emotionalProfile: sentimentData.breakdown
       };
-
       addEntry(entry);
       setIsSaved(true);
-      
+      if (user) {
+          localStorage.removeItem(`draft_${user.email}`);
+      }
       setTimeout(() => {
         setForm({ personal: '', family: '', professional: '' });
         setImages([]);
         setIsSaved(false);
         setLastSentiment(null);
         setSuggestedPrompt('');
-      }, 5000); 
+      }, 7000);
     } catch (error) {
       console.error("Error saving entry", error);
-      alert("Error al guardar la entrada.");
     } finally {
       setIsSaving(false);
     }
@@ -180,45 +220,38 @@ const Journal = () => {
     <div className="max-w-2xl mx-auto p-4 pb-24">
       {/* Camera Modal */}
       {isCameraOpen && (
-        <div className="fixed inset-0 bg-black z-50 flex flex-col justify-between animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black z-[100] flex flex-col justify-between animate-in fade-in duration-200">
+            <div className={`absolute inset-0 bg-white z-[110] pointer-events-none transition-opacity duration-150 ${isFlashing ? 'opacity-100' : 'opacity-0'}`} />
             <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
-                 <video 
-                    ref={videoRef} 
-                    autoPlay 
-                    playsInline 
-                    className="w-full h-full object-cover" 
-                 />
-                 <button 
-                    onClick={() => setIsCameraOpen(false)}
-                    className="absolute top-4 right-4 p-2 bg-black/50 text-white rounded-full hover:bg-black/70"
-                 >
-                    <X size={24} />
+                 <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-70">
+                    <div className="w-64 h-64 border border-white/30 rounded-lg relative">
+                        <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-white -mt-0.5 -ml-0.5 rounded-tl-sm"></div>
+                        <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-white -mt-0.5 -mr-0.5 rounded-tr-sm"></div>
+                        <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-white -mb-0.5 -ml-0.5 rounded-bl-sm"></div>
+                        <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-white -mb-0.5 -mr-0.5 rounded-br-sm"></div>
+                        <div className="absolute top-1/2 left-1/2 w-2 h-2 bg-white/80 rounded-full transform -translate-x-1/2 -translate-y-1/2"></div>
+                    </div>
+                 </div>
+                 <button onClick={() => setIsCameraOpen(false)} className="absolute top-6 right-6 p-3 bg-black/40 text-white rounded-full hover:bg-black/60 backdrop-blur-md z-50">
+                    <X size={28} />
                  </button>
             </div>
-            <div className="h-24 bg-black flex items-center justify-center pb-4">
-                 <button 
-                    onClick={capturePhoto}
-                    className="w-16 h-16 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/20 transition-colors"
-                 >
-                    <div className="w-12 h-12 bg-white rounded-full"></div>
+            <div className="h-36 bg-black flex items-center justify-center pb-8 pt-4">
+                 <button onClick={capturePhoto} className="group relative">
+                    <div className="w-20 h-20 rounded-full border-[5px] border-white flex items-center justify-center transition-transform duration-100 group-active:scale-95">
+                        <div className="w-[68px] h-[68px] bg-white rounded-full group-active:bg-gray-300 transition-colors border-2 border-black"></div>
+                    </div>
                  </button>
             </div>
         </div>
       )}
 
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Nueva Entrada</h1>
-        <button
-            onClick={handleGetPrompt}
-            disabled={isGeneratingPrompt}
-            className="flex items-center space-x-2 px-3 py-2 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-xl text-sm font-medium hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors"
-        >
-            {isGeneratingPrompt ? (
-                <Loader2 size={16} className="animate-spin" />
-            ) : (
-                <Sparkles size={16} />
-            )}
-            <span>Inspírame</span>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.title}</h1>
+        <button onClick={handleGetPrompt} disabled={isGeneratingPrompt} className="flex items-center space-x-2 px-3 py-2 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-xl text-sm font-medium">
+            {isGeneratingPrompt ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+            <span>{t.inspire}</span>
         </button>
       </div>
 
@@ -226,86 +259,68 @@ const Journal = () => {
         <div className="mb-6 bg-purple-50 dark:bg-purple-900/10 border border-purple-100 dark:border-purple-800 p-4 rounded-xl relative animate-fade-in">
             <div className="flex items-start gap-3">
                 <Lightbulb className="text-purple-500 mt-1 flex-shrink-0" size={20} />
-                <div>
-                    <h4 className="font-semibold text-purple-800 dark:text-purple-300 text-sm mb-1">Pregunta del día</h4>
-                    <p className="text-gray-700 dark:text-gray-300 italic">{suggestedPrompt}</p>
+                <div className="flex-1">
+                    <h4 className="font-semibold text-purple-800 dark:text-purple-300 text-sm mb-1">{t.preguntaDia}</h4>
+                    <p className="text-gray-700 dark:text-gray-300 italic mb-3">{suggestedPrompt}</p>
+                    <button onClick={handleUsePrompt} className="flex items-center space-x-1 text-xs font-medium text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 transition-colors bg-purple-100 dark:bg-purple-800/30 px-2 py-1 rounded-lg">
+                      <ArrowDownCircle size={14} />
+                      <span>{t.usarDiario}</span>
+                    </button>
                 </div>
-                <button onClick={() => setSuggestedPrompt('')} className="absolute top-2 right-2 text-gray-400 hover:text-gray-600">
+                <button onClick={() => setSuggestedPrompt('')} className="absolute top-2 right-2 text-gray-400">
                     <X size={14} />
                 </button>
             </div>
         </div>
       )}
 
-      {/* Tabs */}
       <div className="flex space-x-2 mb-6 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl">
         {(['personal', 'family', 'professional'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-              activeTab === tab
-                ? 'bg-white dark:bg-gray-700 text-primary-600 shadow-sm'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'
+              activeTab === tab ? 'bg-white dark:bg-gray-700 text-primary-600 shadow-sm' : 'text-gray-500'
             }`}
           >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === 'personal' ? t.personal : tab === 'family' ? t.family : t.professional}
           </button>
         ))}
       </div>
 
-      {/* Text Area */}
       <div className="mb-6">
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          ¿Cómo te fue en el ámbito {activeTab === 'family' ? 'familiar' : activeTab}?
+          {t.questionLabel.replace('{scope}', activeTab === 'personal' ? t.personal : activeTab === 'family' ? t.family : t.professional)}
         </label>
         <textarea
           value={form[activeTab]}
           onChange={(e) => setForm(prev => ({ ...prev, [activeTab]: e.target.value }))}
-          className="w-full h-40 p-4 rounded-xl border border-gray-300 focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none shadow-sm bg-white text-gray-900"
-          placeholder={`Hoy en mi vida ${activeTab === 'family' ? 'familiar' : activeTab}...`}
+          className="w-full h-40 p-4 rounded-xl border border-gray-300 focus:ring-2 focus:ring-primary-500 bg-white text-gray-900"
+          placeholder={t.placeholder.replace('{scope}', activeTab === 'personal' ? t.personal : activeTab === 'family' ? t.family : t.professional)}
         />
       </div>
 
-      {/* Images Section */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Momentos (Fotos)</h3>
-          
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">{t.moments}</h3>
           <div className="flex space-x-2">
-            <button 
-                onClick={() => setIsCameraOpen(true)}
-                className="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-primary-600 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
+            <button onClick={() => setIsCameraOpen(true)} className="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-primary-600 rounded-lg text-sm">
                 <Camera size={16} />
-                <span>Cámara</span>
+                <span>{t.camera}</span>
             </button>
-            <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-600 rounded-lg text-sm">
                 <ImageIcon size={16} />
-                <span>Galería</span>
+                <span>{t.gallery}</span>
             </button>
           </div>
-          <input 
-            type="file" 
-            accept="image/*" 
-            onChange={handleImageUpload} 
-            className="hidden" 
-            ref={fileInputRef}
-          />
+          <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" ref={fileInputRef} />
         </div>
-        
         {images.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
             {images.map((img, idx) => (
               <div key={idx} className="relative aspect-square rounded-xl overflow-hidden group">
                 <img src={img} alt="Moment" className="w-full h-full object-cover" />
-                <button
-                  onClick={() => removeImage(idx)}
-                  className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                >
+                <button onClick={() => removeImage(idx)} className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
                   <X size={12} />
                 </button>
               </div>
@@ -314,45 +329,66 @@ const Journal = () => {
         )}
       </div>
 
-      {/* Sentiment Feedback Visual */}
       {isSaved && lastSentiment && emotionConfig && (
-        <div className={`mb-6 p-4 rounded-xl border flex flex-col items-center justify-center space-y-2 animate-bounce-in shadow-sm ${emotionConfig.color.replace('text-', 'border-').replace('100', '200')}`}>
-           <div className={`p-3 rounded-full bg-white shadow-sm`}>
-             <emotionConfig.icon size={32} className={emotionConfig.color.match(/text-\w+-\d+/)?.[0] || 'text-gray-600'} />
+        <div className={`mb-6 p-4 rounded-xl border flex flex-col space-y-4 animate-bounce-in shadow-sm ${emotionConfig.color.replace('text-', 'border-').replace('100', '200')}`}>
+           <div className="flex items-center justify-center space-x-3">
+             <div className="p-3 rounded-full bg-white shadow-sm">
+               <emotionConfig.icon size={32} className={emotionConfig.color.match(/text-\w+-\d+/)?.[0] || 'text-gray-600'} />
+             </div>
+             <div className="text-left">
+               <h4 className="font-bold text-lg dark:text-gray-900">{emotionConfig.label}</h4>
+               <p className="text-sm opacity-80 dark:text-gray-800">{lastSentiment.summary}</p>
+             </div>
            </div>
-           <div className="text-center">
-             <h4 className="font-bold text-lg dark:text-gray-900">
-               {emotionConfig.label}
-             </h4>
-             <p className="text-sm opacity-80 dark:text-gray-800">{lastSentiment.summary}</p>
-           </div>
+           {lastSentiment.breakdown && (
+               <div className="bg-white/50 dark:bg-black/10 rounded-lg p-3 w-full">
+                   <p className="text-xs font-bold uppercase opacity-70 mb-2 dark:text-gray-900">{t.desglose}</p>
+                   <div className="space-y-2">
+                       {Object.entries(lastSentiment.breakdown).sort(([,a], [,b]) => (b as number) - (a as number)).map(([emotion, percent]) => (
+                           <div key={emotion} className="flex items-center text-sm">
+                               <span className="w-24 truncate font-medium dark:text-gray-800">{emotion}</span>
+                               <div className="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden mx-2">
+                                   <div className="h-full bg-primary-500" style={{ width: `${percent}%` }}></div>
+                               </div>
+                               <span className="text-xs font-bold w-8 text-right dark:text-gray-800">{percent}%</span>
+                           </div>
+                       ))}
+                   </div>
+               </div>
+           )}
         </div>
       )}
 
-      {/* Save Action */}
       <button
         onClick={handleSave}
         disabled={isSaving || isSaved || (!form.personal && !form.family && !form.professional)}
         className={`w-full py-3 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all ${
-          isSaved 
-            ? 'bg-green-500 text-white'
-            : 'bg-primary-600 text-white hover:bg-primary-700 shadow-lg shadow-primary-500/30 disabled:opacity-50'
+          isSaved ? 'bg-green-500 text-white' : 'bg-primary-600 text-white hover:bg-primary-700 shadow-lg'
         }`}
       >
         {isSaving ? (
           <>
             <Loader2 size={20} className="animate-spin" />
-            <span>Analizando emociones...</span>
+            <span>{t.processing}</span>
           </>
         ) : isSaved ? (
-          <span>¡Guardado!</span>
+          <span>{t.saved}</span>
         ) : (
           <>
             <Save size={20} />
-            <span>Guardar Entrada</span>
+            <span>{t.save}</span>
           </>
         )}
       </button>
+
+      {isSaving && (
+        <div className="mt-4 flex flex-col items-center animate-in fade-in slide-in-from-bottom-2">
+             <div className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md mb-2">
+                <Loader2 size={24} className="text-primary-600 animate-spin" />
+             </div>
+             <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t.analysis}</p>
+        </div>
+      )}
     </div>
   );
 };

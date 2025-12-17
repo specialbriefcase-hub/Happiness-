@@ -1,7 +1,10 @@
+
 export enum AppTheme {
   LIGHT = 'light',
   DARK = 'dark',
 }
+
+export type Language = 'es' | 'en' | 'fr' | 'it';
 
 export interface UserProfile {
   username: string;
@@ -28,11 +31,13 @@ export interface JournalEntry {
   images: string[]; // Base64 strings
   sentiment?: string; // Specific emotion name (e.g., "Joy", "Gratitude")
   sentimentSummary?: string;
+  emotionalProfile?: Record<string, number>; // e.g., { "Joy": 60, "Pride": 40 }
 }
 
 export interface AppSettings {
   theme: AppTheme;
   fontSize: 'small' | 'medium' | 'large';
+  language: Language;
 }
 
 export interface Message {
@@ -40,4 +45,20 @@ export interface Message {
   content: string;
   type?: 'text' | 'map_result' | 'search_result';
   metadata?: any;
+}
+
+// Goals Feature Types
+export type GoalTerm = 'short-term' | 'long-term';
+export type GoalDomain = 'personal' | 'family' | 'professional';
+export type GoalStatus = 'suggested' | 'active' | 'completed';
+
+export interface Goal {
+  id: string;
+  title: string;
+  description: string;
+  term: GoalTerm;
+  domain: GoalDomain;
+  status: GoalStatus;
+  createdAt: number;
+  isAiGenerated: boolean;
 }

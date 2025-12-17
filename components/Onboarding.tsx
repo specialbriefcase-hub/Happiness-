@@ -1,10 +1,13 @@
+
 import React, { useState } from 'react';
 import { analyzePurpose } from '../services/gemini';
 import { useAppContext } from '../context/AppContext';
 import { Loader2 } from 'lucide-react';
+import { translations } from '../services/translations';
 
 const Onboarding = () => {
-  const { completeOnboarding } = useAppContext();
+  const { completeOnboarding, settings } = useAppContext();
+  const t = translations[settings.language].onboarding;
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [answers, setAnswers] = useState({
@@ -21,7 +24,7 @@ const Onboarding = () => {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const result = await analyzePurpose(answers);
+      const result = await analyzePurpose(answers, settings.language);
       completeOnboarding(result.detailedAnalysis, result.shortStatement);
     } catch (error) {
       console.error("Analysis failed", error);
@@ -31,35 +34,17 @@ const Onboarding = () => {
     }
   };
 
-  const steps = [
-    {
-      title: "Emociones (Positive Emotions)",
-      question: "¿Qué actividades te hacen sentir verdadera alegría, gratitud o asombro?",
-      field: 'emotions',
-    },
-    {
-      title: "Pasatiempos (Engagement)",
-      question: "¿Cuándo pierdes la noción del tiempo? ¿En qué pasatiempos te sumerges completamente?",
-      field: 'hobbies',
-    },
-    {
-      title: "Valores (Meaning)",
-      question: "¿Qué es lo más importante en tu vida? ¿Qué causas o personas te mueven?",
-      field: 'importantValues',
-    },
-    {
-      title: "Profesional (Accomplishment)",
-      question: "¿Cómo describirías tu éxito profesional ideal? ¿Qué te gustaría lograr?",
-      field: 'professionalGoals',
-    }
-  ];
+  const steps = t.steps.map((s: any, i: number) => ({
+    ...s,
+    field: i === 0 ? 'emotions' : i === 1 ? 'hobbies' : i === 2 ? 'importantValues' : 'professionalGoals'
+  }));
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-screen p-6 text-center">
         <Loader2 className="w-12 h-12 text-primary-500 animate-spin mb-4" />
-        <h2 className="text-xl font-semibold mb-2">Buscando tu Sentido...</h2>
-        <p className="text-gray-500">La IA está analizando tus respuestas para encontrar tu propósito basado en el modelo PERMA.</p>
+        <h2 className="text-xl font-semibold mb-2">{t.loadingTitle}</h2>
+        <p className="text-gray-500">{t.loadingSub}</p>
       </div>
     );
   }
@@ -70,7 +55,7 @@ const Onboarding = () => {
     <div className="max-w-lg mx-auto p-6 h-screen flex flex-col justify-center">
       <div className="mb-8">
         <div className="flex justify-between mb-2">
-          <span className="text-xs font-semibold uppercase text-primary-600">Paso {step + 1} de {steps.length}</span>
+          <span className="text-xs font-semibold uppercase text-primary-600">{t.step} {step + 1} {t.of} {steps.length}</span>
           <span className="text-xs font-semibold text-gray-400">{Math.round(((step + 1) / steps.length) * 100)}%</span>
         </div>
         <div className="w-full bg-gray-200 rounded-full h-2">
@@ -84,7 +69,7 @@ const Onboarding = () => {
         
         <textarea
           className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all h-40 resize-none bg-white text-gray-900"
-          placeholder="Escribe tu reflexión aquí..."
+          placeholder={t.placeholder}
           value={(answers as any)[currentStep.field]}
           onChange={(e) => handleChange(currentStep.field, e.target.value)}
         />
@@ -96,7 +81,7 @@ const Onboarding = () => {
           disabled={step === 0}
           className={`px-6 py-2 rounded-lg font-medium ${step === 0 ? 'text-gray-400 opacity-50 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'}`}
         >
-          Atrás
+          {t.back}
         </button>
         
         {step < steps.length - 1 ? (
@@ -105,7 +90,7 @@ const Onboarding = () => {
             disabled={!(answers as any)[currentStep.field]}
             className="px-6 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-primary-500/30"
           >
-            Siguiente
+            {t.next}
           </button>
         ) : (
           <button
@@ -113,7 +98,7 @@ const Onboarding = () => {
             disabled={!(answers as any)[currentStep.field]}
             className="px-6 py-2 bg-secondary-600 text-white rounded-lg font-medium hover:bg-secondary-700 disabled:opacity-50 shadow-lg shadow-secondary-500/30"
           >
-            Descubrir mi Propósito
+            {t.finish}
           </button>
         )}
       </div>
